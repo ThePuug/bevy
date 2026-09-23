@@ -8,7 +8,7 @@ use std::thread::{self, ThreadId};
 use bevy_diagnostic::{Diagnostic, DiagnosticMeasurement, DiagnosticPath, DiagnosticsStore};
 use bevy_ecs::resource::Resource;
 use bevy_ecs::system::{Res, ResMut};
-use bevy_platform::time::Instant;
+use bevy_platform::{collections::HashMap, time::Instant};
 use std::sync::Mutex;
 use wgpu::{
     Buffer, BufferDescriptor, BufferSize, BufferSlice, BufferUsages, CommandEncoder, ComputePass,
@@ -532,6 +532,8 @@ impl FrameData {
                 }
             }
 
+            let mut diagnostics = sum_by_path(diagnostics);
+
             for (buffer, diagnostic_path, is_f32) in self.value_buffers.drain(..) {
                 let buffer = buffer.get_mapped_range(..);
                 diagnostics.push(RenderDiagnostic {
@@ -674,6 +676,8 @@ impl FrameData {
             }
         }
 
+        let mut diagnostics = sum_by_path(diagnostics);
+
         for (buffer, diagnostic_path, is_f32) in self.value_buffers.drain(..) {
             let buffer = buffer.get_mapped_range(..);
             diagnostics.push(RenderDiagnostic {
@@ -697,6 +701,29 @@ impl FrameData {
 
         true
     }
+}
+
+/// Adds together the diagnostics of spans that share a path, keeping the
+/// order each path first appeared in.
+///
+/// A pass that runs once per view (a shadow pass per cascade, a main pass
+/// per camera) opens a span under the same name for each run, and what the
+/// pass cost the frame is their sum. Stored separately, each run would be
+/// a measurement of its own, smoothed with the others as if they were
+/// successive frames.
+fn sum_by_path(diagnostics: Vec<RenderDiagnostic>) -> Vec<RenderDiagnostic> {
+    let mut index = HashMap::<DiagnosticPath, usize>::default();
+    let mut summed: Vec<RenderDiagnostic> = Vec::with_capacity(diagnostics.len());
+    for diagnostic in diagnostics {
+        match index.get(&diagnostic.path) {
+            Some(&i) => summed[i].value += diagnostic.value,
+            None => {
+                index.insert(diagnostic.path.clone(), summed.len());
+                summed.push(diagnostic);
+            }
+        }
+    }
+    summed
 }
 
 /// Resource which stores render diagnostics of the most recent frame.
